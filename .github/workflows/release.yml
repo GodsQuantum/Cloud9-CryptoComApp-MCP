@@ -1,0 +1,110 @@
+name: Verify seven Crypto App MCP tools and publish upstream-based GHCR
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+permissions:
+  contents: read
+  packages: write
+concurrency:
+  group: crypto-app-mcp-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    outputs:
+      vendor_sha: ${{ steps.vendor.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Seven-tool reference and privacy
+        run: python3 tests/privacy.py
+      - id: vendor
+        name: Follow current original vendor main, not a local vendor fork
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          sha="$(gh api repos/crypto-com/crypto-agent-trading/commits/main --jq .sha)"
+          [[ "$sha" =~ ^[a-f0-9]{40}$ ]]
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "ORIGINAL_CRYPTOCOM_AGENT_VENDOR_SHA=$sha"
+      - uses: docker/setup-buildx-action@v3
+      - name: Build verified current official vendor scripts
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          pull: true
+          load: true
+          platforms: linux/amd64
+          build-args: |
+            CRYPTO_SKILL_SHA=${{ steps.vendor.outputs.sha }}
+          tags: local/cloud9-cryptocomapp-mcp:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install MCP client for real protocol regression
+        run: python -m pip install --disable-pip-version-check "mcp>=2,<3"
+      - name: Real HTTP seven-tool schema, destructive marker and no real funds moved
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run -d --rm --name cloud9-cryptocomapp-smoke \
+            -e ALLOW_LIVE_TRADES=false \
+            -p 127.0.0.1:18185:8185 \
+            local/cloud9-cryptocomapp-mcp:test
+          trap 'docker rm -f cloud9-cryptocomapp-smoke >/dev/null 2>&1 || true' EXIT
+          ready=no
+          for i in $(seq 1 30); do
+            if curl -fsS --max-time 2 http://127.0.0.1:18185/healthz >/dev/null 2>&1;then
+              ready=yes
+              break
+            fi
+            sleep 1
+          done
+          if [ "$ready" != yes ];then docker logs --tail 100 cloud9-cryptocomapp-smoke;exit 1;fi
+          docker exec cloud9-cryptocomapp-smoke node -e "const fs=require('node:fs'); for (const f of ['account.ts','coins.ts','trade.ts']) if (!fs.existsSync('/app/upstream/crypto-com-app/scripts/'+f)) process.exit(1)"
+          python tests/verify_tools.py || { docker logs --tail 80 cloud9-cryptocomapp-smoke;exit 1; }
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ghcr.io/godsquantum/cloud9-cryptocomapp-mcp
+          tags: |
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=sha,prefix=sha-
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          pull: true
+          push: true
+          platforms: linux/amd64,linux/arm64
+          build-args: |
+            CRYPTO_SKILL_SHA=${{ needs.test.outputs.vendor_sha }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: |
+            ${{ steps.meta.outputs.labels }}
+            org.opencontainers.image.source=https://github.com/GodsQuantum/Cloud9-CryptoComApp-MCP
+            org.opencontainers.image.title=Cloud9-CryptoComApp-MCP
+            org.opencontainers.image.licenses=MIT
+            com.cloud9.vendor.sha=${{ needs.test.outputs.vendor_sha }}
+            com.cloud9.vendor.source=https://github.com/crypto-com/crypto-agent-trading
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

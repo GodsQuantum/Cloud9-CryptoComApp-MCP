@@ -1,0 +1,22 @@
+name: cloud9-cryptocom-app-mcp
+services:
+  crypto-app-mcp:
+    image: ghcr.io/godsquantum/cloud9-cryptocomapp-mcp:latest
+    pull_policy: always
+    restart: unless-stopped
+    init: true
+    env_file: .env
+    ports:
+      - "127.0.0.1:8185:8185"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD","node","-e","fetch('http://127.0.0.1:8185/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

@@ -1,0 +1,12 @@
+{
+  "name": "cloud9-cryptocom-app-read-mcp",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@modelcontextprotocol/server": "2.4.0",
+    "@modelcontextprotocol/node": "2.1.2",
+    "tsx": "4.23.15",
+    "zod": "4.6.7"
+  }
+}
